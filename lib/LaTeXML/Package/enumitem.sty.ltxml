@@ -14,10 +14,206 @@ package LaTeXML::Package::Pool;
 use strict;
 use warnings;
 use LaTeXML::Package;
+use LaTeXML::Common::Error;
 
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# TODO  Deal with Scads of options!
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#======================================================================
+# Setting list types, names and depths
+#======================================================================
+
+# \newlist{name}{type}{max-depth}
+DefMacro('\newlist {} Semiverbatim {Number}', sub {
+  my ($gullet, $name, $type, $maxdepth) = @_;
+  $name = ToString($name);
+  
+  # store the type of list it is
+  my %types = (
+    "enumerate" => 1, "enumerate*" => 1,
+    "itemize" => 1, "itemize*" => 1,
+    "description" => 1, "description*" => 1,
+  );
+  $type = ToString($type);
+  unless(exists($types{$type})) {
+    Error('misdefined', $type, $gullet->getLocator, 
+      "Unknown list type `$type` for `$name`", "Valid types are: enumerate, itemize, description, enumerate*, itemize*, description*"); }
+
+  # Maximum depth of the list (> 0)
+  $maxdepth = $maxdepth->valueOf;
+  if($maxdepth <= 0){
+    Error('misdefined', $maxdepth, $gullet->getLocator, 
+      "Invalid maxdepth value for `$name`", "maxdepth is $maxdepth, but should be positive. "); }
+    
+  # Define the environment of the list
+  DefEnvironment('{' . $name . '} OptionalKeyVals:enumitem', sub {
+    my ($gullet, $args) = @_;
+
+    # the level of the list
+    my $list = $name . '@@1';
+
+
+    return ();
+  });
+
+  # And finally store the list properties
+  storeListDef($name, $type, $maxdepth);
+});
+
+# \renewlist{name}{type}{max-depth}
+Let('\renewlist', '\newlist'); # really just does the same thing
+
+sub storeListDef {
+  my ($name, $type, $maxdepth) = @_;
+
+  # add $name to the set of known lists, unless it already exists
+
+  my $lists = LookupValue('enumitem@@lists');
+  my %types = map { $_ => 1} @{$lists} if defined($lists);
+  PushValue('enumitem@@lists', $name) unless exists($types{$name});
+
+  # set type and list
+  AssignValue('enumitem@@list@@type' => $type);
+  AssignValue('enumitem@@list@@maxdepth' => $maxdepth) if defined($maxdepth); }
+
+# \setlistdepth{depth}
+DefMacro('\setlistdepth {Number}', sub { AssignValue('enumitem@@maxdepth' => $_[1]->valueOf); });
+AssignValue('enumitem@@maxdepth' => 5);
+
+# Setup the default lists
+# TODO: Add the *variants if defined
+storeListDef('enumerate', 'enumerate');
+storeListDef('itemize', 'itemize');
+storeListDef('description', 'description');
+
+#======================================================================
+# Setting list properties
+#======================================================================
+
+DefMacro('\setlist OptionalMatch:* [] OptionalMatch:* RequiredKeyVals:enumitem', sub {
+  my ($gullet, $star, $spec, $star2, $options) = @_;
+  $star = defined($star) || defined($star2); # backwards compatibility for older versions of the package
+  my @lists = resolveSpec(ToString($spec));
+  foreach (@lists) { setListProps($_, $options, $star); }
+  return (); });
+
+# set some properties for a given list
+# append to existing properties if append is True
+sub setListProps {
+  my ($list, $props, $append) = @_;
+  # empty list props if they already exist
+  $list = 'enumitem@@list@@' . $list . '@@props';
+  AssignValue($list, undef) unless $append;
+  # Capture all the set keys
+  DefMacro('\enumitem@@setkey {} {}', sub {
+    my ($gullet, $key, $value) = @_;
+    $key = ToString($key);
+    # when setting a series key, define the macro for it
+    DefKeyVal('enumitem', ToString($value), '{}', undef, code=>enumSetKey('series', ToString($value))) if $key == 'series';
+    AssignMapping($list, $key, Revert($value)); });
+  
+  # TODO: Append the macros to be used for expansion 
+  $props->beDigested($STATE->getStomach);
+  Let('\enumitem@@setkey', '\relax'); }
+
+# resolves a \setitem{lists,levels} into a specification
+# of 'list@@level' (to be used for internal macro setting)
+sub resolveSpec {
+  my ($spec) = @_;
+  my (@lists, @levels, @resolved, $value, $list, $level);
+  # add each digit to lists, and each level to levels
+  my @values = split(',', $spec || '');
+  foreach $value (@values) {
+    next unless $value;
+    if($value =~ /\D/){
+      push(@lists, $value); }
+    else {
+      push(@levels, $value + 0); } }
+  # if no lists were defined, take all of them
+  unless(@lists) {
+    foreach $value (@{LookupValue('enumitem@@lists')}) {
+      push(@lists, $value); } }
+  foreach $list (@lists) {
+    # if levels were picked, take one of them
+    if(@levels){
+      foreach $level (@levels) {
+        push(@resolved, $list . '@@' . $level); } }
+    # if not, use the local maxdepth (or the global one if undef)
+    else {
+      $value = LookupValue('enumitem@@list@@' . $list . '@@maxdepth') || LookupValue('enumitem@@maxdepth');
+      foreach $level (1..$value) {
+        push(@resolved, $list . '@@' . $level); } } }
+  # and return the resolved lists
+  return @resolved; }
+
+### Special Properties
+
+# \SetLabelAlign{name}{command} # set special alignment for labels
+# \SetEnumerateShortLabel{key}{replacement} # change the replacement
+# \AddEnumerateCounter{⟨LaTeX command⟩}{⟨internal command⟩}{⟨widest label⟩} # adding a counter, we may be able to ignore thids
+
+# \restartlist{name} # fun
+
+#======================================================================
+# Keys
+#======================================================================
+
+# macro to store key in the current setting
+sub enumSetKey { return '\enumitem@@setkey{' . $_[0] . '}{' . (defined($_[1]) ? $_[1] : '#1'). '}'; }
+Let('\enumitem@@setkey', '\relax');
+
+#### vertical spacing
+DefKeyVal('enumitem', 'topsep', '{Dimension}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'partopsep', '{Dimension}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'parsep', '{Dimension}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'itemsep', '{Dimension}'); # not relevant for LaTeXML
+
+#### horizontal spacing
+DefKeyVal('enumitem', 'leftmargin', '{Dimension}');# not relevant for LaTeXML
+DefKeyVal('enumitem', 'rightmargin', '{Dimension}');# not relevant for LaTeXML
+DefKeyVal('enumitem', 'listparindent', '{Dimension}');# not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelwidth', '{Dimension}');# not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelsep', '{Dimension}');# not relevant for LaTeXML
+DefKeyVal('enumitem', 'itemindent', '{Dimension}');# not relevant for LaTeXML
+
+#### Label and cross references format
+DefKeyVal('enumitem', 'label', '{}', undef, code=>enumSetKey('label'));
+DefKeyVal('enumitem', 'label*', '{}', undef, code=>enumSetKey('label*'));
+DefKeyVal('enumitem', 'ref', '{}', undef, code=>enumSetKey('ref'));
+DefKeyVal('enumitem', 'font', '{}', undef, code=>enumSetKey('font'));
+DefKeyVal('enumitem', 'format', '{}', undef, code=>enumSetKey('font')); # synonymous with font
+DefKeyVal('enumitem', 'align', '{}', undef); # ignored for now
+
+#### Horizontal spacing of labels
+DefKeyVal('enumitem', 'leftmargin', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'itemindent', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelindent', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelwidth', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelsep', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelsep*', '{}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'labelindent*', '{}'); # not relevant for LaTeXML
+
+DefKeyVal('enumitem', 'widest*', '{Dimension}'); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'widest', '{Dimension}'); # not relevant for LaTeXML
+
+#### Numbering, stopping, and resuming
+
+DefKeyVal('enumitem', 'start', '{Number}', undef, code=>enumSetKey('start'));
+DefKeyVal('enumitem', 'resume', '{}', undef, code=>enumSetKey('resume'));
+DefKeyVal('enumitem', 'resume*', '{}', undef, code=>enumSetKey('resume'));
+
+### Series
+
+DefKeyVal('enumitem', 'series', '{}', undef, code=>enumSetKey('series'));
+
+### Penalities
+DefKeyVal('enumitem', 'beginpenalty', '{Number}' ); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'midpenalty', '{Number}' ); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'endpenalty', '{Number}' ); # not relevant for LaTeXML
+
+DefKeyVal('enumitem', 'before', '{}' ); # not relevant for LaTeXML
+DefKeyVal('enumitem', 'after', '{}' ); # not relevant for LaTeXML
+
+#======================================================================
+# Starting ending lists
 #======================================================================
 
 # But first, a stub that ignores the new optional arg to itemize, etal.
@@ -40,12 +236,6 @@ DefEnvironment('{description} OptionalUndigested',
   properties => sub { beginItemize('description', '@desc'); },
   beforeDigestEnd => sub { Digest('\par'); },
   locked => 1, mode => 'text');
-
-# TODO: Manage and store the options and maximum depth
-DefMacro('\newlist{}{}{}',   '\newenvironment{#1}[1]{\begin{#2}##1}{\end{#2}}');
-DefMacro('\renewlist{}{}{}', '\renewenvironment{#1}[1]{\begin{#2}##1}{\end{#2}}');
-
-DefMacro('\setlist OptionalUndigested {}', '');
 
 #======================================================================
 1;
