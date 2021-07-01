@@ -1,0 +1,24 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+
+\usepackage[backend=biber]{biblatex}
+
+\begin{document}
+
+Let's cite! The Einstein's journal paper \cite{einstein} and the Dirac's 
+book \cite{dirac} are physics related items. 
+
+
+\begingroup
+\makeatletter
+\blx@bblstart
+\input{example.bbl}
+\blx@bblend
+\global\toggletrue{blx@bbldone}
+\makeatother
+\endgroup
+
+\printbibliography
+
+\end{document}

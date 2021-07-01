@@ -387,6 +387,7 @@ lib/LaTeXML/Package/balance.sty.ltxml
 lib/LaTeXML/Package/bbm.sty.ltxml
 lib/LaTeXML/Package/bbold.sty.ltxml
 lib/LaTeXML/Package/beton.sty.ltxml
+lib/LaTeXML/Package/biblatex.sty.ltxml
 lib/LaTeXML/Package/bibunits.sty.ltxml
 lib/LaTeXML/Package/blindtext.sty.ltxml
 lib/LaTeXML/Package/bm.sty.ltxml
