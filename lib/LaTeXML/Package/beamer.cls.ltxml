@@ -1,0 +1,134 @@
+# -*- mode: Perl -*-
+# /=====================================================================\ #
+# |  article                                                            | #
+# | Implementation for LaTeXML                                          | #
+# |=====================================================================| #
+# | Part of LaTeXML:                                                    | #
+# |  Public domain software, produced as part of work done by the       | #
+# |  United States Government & not subject to copyright in the US.     | #
+# |---------------------------------------------------------------------| #
+# | Bruce Miller <bruce.miller@nist.gov>                        #_#     | #
+# | http://dlmf.nist.gov/LaTeXML/                              (o o)    | #
+# \=========================================================ooo==U==ooo=/ #
+package LaTeXML::Package::Pool;
+use strict;
+use warnings;
+use LaTeXML::Package;
+
+LoadPool('LaTeX');
+
+# TODO: beamerbasemodes, beamerbaseoptions
+#**********************************************************************
+# Option handling
+
+# various options -- ignore them for now!
+foreach my $option (qw(
+    usepdftitle envcountsect notheorems noamsthm
+    compress
+    t c
+    leqno fleqn
+    handout trans
+    pdftex nativepdf pdfmark dvips dviwindo dvipsone vtex ps2pdf
+    ignorenonframetext
+    noamssymb
+    bigger smaller
+    8pt 9pt 10pt 11pt 12pt 14pt 17pt 20pt
+    CJK cjk
+    notes
+)) {
+  DeclareOption($option, undef); }
+
+DefParameterType('BeamerOverlay', sub {
+   my ($gullet) = @_;
+   my $tok = $gullet->readXToken;
+   if (ref $tok && ToString($tok) eq '<') {
+     $gullet->readUntil(T_OTHER('>'));
+   } else {
+     $gullet->unread($tok) if ref $tok;
+     undef; }},
+     reversion=> sub {
+ (T_OTHER('<'), $_[0]->revert, T_OTHER('>'));
+       });
+
+ProcessOptions();
+
+#**********************************************************************
+# Dependencies
+
+RequirePackage('ifpdf');
+#RequirePackage('pgfcore');
+#RequirePackage('xxcolor');
+
+# TODO: Properly define all the math-like environments of beamer.
+# For now we just "steal" amsmath, so that we don't have to reimplement them. 
+# But there are also a bunch of things that aren't defined yet!
+RequirePackage('amsmath'); # technically, beamer defines different environments, but we don't want to redefine them if others already have!
+
+# TODO '\qedhere' (and where it comes from!)
+RequirePackage('hyperref', options => ['bookmarks=true', 'bookmarksopen=true', 'pdfborder={0 0 0}', 'pdfhighlight={/N}', 'linkbordercolor={.5 .5 .5}']);
+
+#**********************************************************************
+# Document structure.
+RelaxNGSchema("LaTeXML");
+# RequireResource('ltx-article.css');
+
+# for the moment, have a very simple binding for all of these!
+DefEnvironment('{frame}[]', "<ltx:slide>#body</ltx:slide>");
+DefConstructor('\frametitle{}', '<ltx:title>#1</ltx:title>'); # TODO: Schema!
+DefConstructor('\framesubtitle{}', '<ltx:subtitle>#1</ltx:subtitle>'); # TODO: Schema!
+
+# for now all this is ignored!
+DefMacro('\setbeamertemplate{}[]', undef); # TODO: Optional {} following the options!
+DefMacro('\setbeamercolor{}{}', undef);
+DefMacro('\setbeamerfont{}{}', undef);
+
+
+
+#**********************************************************************
+# Core sectioning support, stolen from article.cls!
+SetCounter('secnumdepth', Number(3));
+NewCounter('part',          'document',      idprefix => 'Pt',  nested => ['section']);
+NewCounter('section',       'document',      idprefix => 'S',   nested => ['subsection']);
+NewCounter('subsection',    'section',       idprefix => 'SS',  nested => ['subsubsection']);
+NewCounter('subsubsection', 'subsection',    idprefix => 'SSS', nested => ['paragraph']);
+NewCounter('paragraph',     'subsubsection', idprefix => 'P',   nested => ['subparagraph']);
+NewCounter('subparagraph', 'paragraph', idprefix => 'SP', nested => ['equation', 'figure', 'table']);
+
+DefMacro('\thepart',          '\Roman{part}');
+DefMacro('\thesection',       '\arabic{section}');
+DefMacro('\thesubsection',    '\thesection.\arabic{subsection}');
+DefMacro('\thesubsubsection', '\thesubsection.\arabic{subsubsection}');
+DefMacro('\theparagraph',     '\thesubsubsection.\arabic{paragraph}');
+DefMacro('\thesubparagraph',  '\theparagraph.\arabic{subparagraph}');
+SetCounter(tocdepth => Number(3));
+
+NewCounter('equation',       'document', idprefix => 'E',  idwithin => 'section');
+NewCounter('@equationgroup', 'document', idprefix => 'EG', idwithin => 'section');
+NewCounter('figure',         'document', idprefix => 'F',  idwithin => 'section');
+NewCounter('table',          'document', idprefix => 'T',  idwithin => 'section');
+
+DefMacro('\theequation', '\arabic{equation}');
+DefMacro('\thefigure',   '\arabic{figure}');
+DefMacro('\thetable',    '\arabic{table}');
+
+NewCounter('enumi',   undef, idwithin => '@itemizei', idprefix => 'i');
+NewCounter('enumii',  undef, idwithin => 'enumi',     idprefix => 'i');
+NewCounter('enumiii', undef, idwithin => 'enumii',    idprefix => 'i');
+NewCounter('enumiv',  undef, idwithin => 'enumiii',   idprefix => 'i');
+DefMacro('\theenumi',   '\arabic{enumi}');
+DefMacro('\theenumii',  '\alph{enumii}');
+DefMacro('\theenumiii', '\roman{enumiii}');
+DefMacro('\theenumiv',  '\Alph{enumiv}');
+
+DefMacro('\refname', 'References');
+
+AssignMapping('BACKMATTER_ELEMENT', 'ltx:bibliography' => 'ltx:section');
+
+Tag('ltx:appendix', autoClose => 1);
+DefMacro('\appendix', '\@appendix');
+# Actually we should be using section counter
+DefPrimitive('\@appendix', sub { startAppendices('section'); });
+
+
+#**********************************************************************
+1;
