@@ -38,6 +38,7 @@ foreach my $option (qw(
 )) {
   DeclareOption($option, undef); }
 
+# adapted from the old beamer
 DefParameterType('BeamerOverlay', sub {
    my ($gullet) = @_;
    my $tok = $gullet->readXToken;
@@ -52,6 +53,147 @@ DefParameterType('BeamerOverlay', sub {
 
 ProcessOptions();
 
+RawTeX(<<'EoTeX');
+\ProvidesClass{beamer}[2021/03/19 v3.62 A class for typesetting presentations]
+EoTeX
+# Force e-TeX and provide \patchcmd
+RequirePackage('etoolbox');
+
+#**********************************************************************
+# Overlay handling
+
+my $overlayParser = Parse::RecDescent->new(<<'EOGRAMMAR');
+start : 
+    modespec(s /|,/)
+
+# a single mode specification is either a mode, a sliderange, or both
+modespec : 
+      MODE '@' frames   { $return = [ "mode" => $item[1], "frames" => $item[3] ] }
+    | MODE                  { $return = [ "mode" => $item[1], "frames" => undef    ] }
+    | frames            { $return = [ "mode" => undef,    "frames" => $item[1] ] }
+
+# a range of slides
+frames : 
+      framenumber '-' framenumber { $return = [ "kind" => "range", "from"   => $item[1], "to" => $item[3] ] }
+    | '-' framenumber             { $return = [ "kind" => "range", "from"   => undef,    "to" => $item[2] ] }
+    | framenumber '-'             { $return = [ "kind" => "range", "from"   => $item[1], "to" => undef    ] }
+    | framenumber                 { $return = [ "kind" => "point", "value"  => $item[1]                   ] }
+
+framenumber : 
+      relative  { $return = [ "kind" => "relative", "value" => $item[1] ] }
+    | POSINT    { $return = [ "kind" => "absolute", "value" => $item[1] ] }
+
+# relative specification - denoted by either a '.' or '+'
+relative : 
+      MODIFIER '(' INT ')' { $return = [ "modifier" => $item[1], "offset" => $item[3] ] }
+    | MODIFIER             { $return = [ "modifier" => $item[1], "offset" => undef    ] }
+
+
+# positive and normal integers => return the kind integer
+INT       : /-?[0-9]*/    { $return = $item[1] + 0 }
+POSINT    : /[1-9][0-9]*/ { $return = $item[1] + 0 }
+
+MODIFIER  : '.' | '+'
+MODE      : 'all' | 'presentation' | 'article' | 'beamer' | 'second' | 'handout' | 'trans' | 'alert'
+
+EOGRAMMAR
+
+# parses and processes an overlay specification
+sub parseOverlaySpec {
+  my ($spec, $lastPlus) = @_;
+  $spec =~ s/\s//g;
+  my ($ast) = $overlayParser->start($spec);
+  return undef, $lastPlus unless defined($ast);
+  return processOverlaySpec($ast, $lastPlus); }
+
+sub stringifyOverlaySpec {
+  my ($spec) = @_;
+  return "" unless defined($spec);
+  my @strings = map {
+    my @data = @{$_};
+    my $count = scalar @data;
+    my $return = "";
+    if ($count == 1) {
+      $return = $data[0];
+    } elsif ($count == 2) {
+      $return .= $data[0] . "\@" if (defined($data[0]));
+      $return .= $data[1];
+    } elsif ($count == 3) {
+      $return .= $data[0] . "\@" if (defined($data[0]));
+      $return .= $data[1] if (defined($data[1]));
+      $return .= "-";
+      $return .= $data[2] if (defined($data[2]));
+    }
+    $return
+  } @$spec;
+  return join(',', @strings);
+}
+
+# resolves a single point
+sub resolvePoint {
+  my ($point, $lastPlus) = @_;
+  return undef, $lastPlus unless defined($point); # no point defined
+  my %data = @$point;
+  return $data{'value'}, $lastPlus if ($data{'kind'} eq 'absolute'); # point is absolute
+  %data = $data{'value'};
+  my ($modifier, $offset) = ($data{'modifier'}, $data{'offset'});
+  if ($modifier eq '.') { # use, but don't increment
+    $offset = 0 unless defined($offset);
+    return $lastPlus + $offset, $lastPlus; } 
+  else { # use and increment
+    $offset = 1 unless defined($offset);
+    $lastPlus = $lastPlus + $offset;
+    return $lastPlus, $lastPlus; } }
+
+# parses and processses an overlay spec
+sub processOverlaySpec {
+  my ($ast, $lastPlus) = @_;
+  my (@mapped) = map {
+    my %data = @{$_};
+    my $mode = $data{'mode'};
+    my $frames = $data{'frames'};
+    if(defined($frames)) { #
+      my ($start, $end);
+      my %frames = @$frames;
+      if ($frames{'kind'} eq 'point') { # just a point
+        ($start, $lastPlus) = resolvePoint($frames{'value'}, $lastPlus);
+        $end = $start; }
+      else { # actual range
+        ($start, $lastPlus) = resolvePoint($frames{'from'}, $lastPlus);
+        ($end, $lastPlus) = resolvePoint($frames{'to'}, $lastPlus); }
+      [$mode, $start, $end] }
+    else {
+      [$mode] } 
+  } @$ast;
+  return [@mapped], $lastPlus; }
+
+# Define a new counter for the current frame
+NewCounter('beamer@slideinframe');
+SetCounter('beamer@slideinframe', Number(0));
+
+DefParameterType('BeamerOverlay', sub {
+   my ($gullet) = @_;
+   my $tok = $gullet->readXToken;
+   if (ref $tok && ToString($tok) eq '<') {
+     $gullet->readUntil(T_OTHER('>'));
+   } else {
+     $gullet->unread($tok) if ref $tok;
+     undef; }},
+     reversion=> sub {
+ (T_OTHER('<'), $_[0]->revert, T_OTHER('>'));
+       });
+
+DefConstructor('\only BeamerOverlay {}', "<ltx:para class='#indexes'>#2</ltx:para>", properties => sub {
+  my ($stomach, $overlay) = @_;
+  my ($spec);
+  # read an store $lastPlus
+  my $lastPlus = CounterValue('beamer@slideinframe')->valueOf;
+  ($spec, $lastPlus) = parseOverlaySpec(ToString($overlay), $lastPlus);
+  SetCounter('beamer@slideinframe', Number($lastPlus));
+  # and store the indexes in the DOM!
+  (indexes => stringifyOverlaySpec($spec));
+});
+
 #**********************************************************************
 # Dependencies
 
@@ -59,10 +201,10 @@ RequirePackage('ifpdf');
 #RequirePackage('pgfcore');
 #RequirePackage('xxcolor');
 
-# TODO: Properly define all the math-like environments of beamer.
-# For now we just "steal" amsmath, so that we don't have to reimplement them. 
-# But there are also a bunch of things that aren't defined yet!
-RequirePackage('amsmath'); # technically, beamer defines different environments, but we don't want to redefine them if others already have!
+#**********************************************************************
+# Beamer Theorems beamerbastheorem
+RequirePackage('amsthm');
+RequirePackage('amsmath');
 
 # TODO '\qedhere' (and where it comes from!)
 RequirePackage('hyperref', options => ['bookmarks=true', 'bookmarksopen=true', 'pdfborder={0 0 0}', 'pdfhighlight={/N}', 'linkbordercolor={.5 .5 .5}']);
