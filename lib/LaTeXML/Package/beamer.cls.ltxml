@@ -17,28 +17,14 @@ use LaTeXML::Package;
 
 LoadPool('LaTeX');
 
-# TODO: beamerbasemodes, beamerbaseoptions
 #**********************************************************************
-# Option handling
+# Ignoring all the options for now
 
-# various options -- ignore them for now!
-foreach my $option (qw(
-    usepdftitle envcountsect notheorems noamsthm
-    compress
-    t c
-    leqno fleqn
-    handout trans
-    pdftex nativepdf pdfmark dvips dviwindo dvipsone vtex ps2pdf
-    ignorenonframetext
-    noamssymb
-    bigger smaller
-    8pt 9pt 10pt 11pt 12pt 14pt 17pt 20pt
-    CJK cjk
-    notes
-)) {
-  DeclareOption($option, undef); }
+RawTeX(<<'EoTeX');
+\ProvidesClass{beamer}[2021/03/19 v3.62 A class for typesetting presentations]
+EoTeX
 
-# adapted from the old beamer
+# argument for beamer overlays
 DefParameterType('BeamerOverlay', sub {
    my ($gullet) = @_;
    my $tok = $gullet->readXToken;
@@ -51,16 +37,41 @@ DefParameterType('BeamerOverlay', sub {
  (T_OTHER('<'), $_[0]->revert, T_OTHER('>'));
        });
 
-ProcessOptions();
+#**********************************************************************
+# Frames - the main environment for beamer
 
-RawTeX(<<'EoTeX');
-\ProvidesClass{beamer}[2021/03/19 v3.62 A class for typesetting presentations]
-EoTeX
-# Force e-TeX and provide \patchcmd
-RequirePackage('etoolbox');
+DefMacro('\begin{frame} OptionalBeamerOverlay [OptionalBeamerOverlay] [] Optional {} Optional {}', 
+  '\begin{beamer@frame}#1 #2 #3 #4 #5');
+DefMacro('\end{frame}', '\beamer@frame@end\end{beamer@frame}');
+
+# the actual frame environemnt
+DefEnvironment('{beamer@frame}[]', "<ltx:slide class='frame'>#body</ltx:slide>");
+
+DefMacro('\beamer@frame@begin',   
+  '\setcounter{beamer@slideinframe}{0}' . # reset the counter for current frames
+  '\beamer@overlay@begin'); # immediatly start a new overlay!
+DefMacro('\beamer@frame@end', '\beamer@overlay@end'); # end an
+
+
+DefConstructor('\frametitle{}', '<ltx:title>#1</ltx:title>');
+DefConstructor('\framesubtitle{}', '<ltx:subtitle>#1</ltx:subtitle>');
+
 
 #**********************************************************************
-# Overlay handling
+# Overlays
+
+# These in principle insert a <ltx:block class="ltx_overlay"> into the right places. 
+# The tricky part is getting the starting and ending right.
+
+# TODO: Pass arguments here!
+DefConstructor('\beamer@overlay@begin', "<ltx:block class='ltx_overlay'>");
+DefConstructor('\beamer@overlay@end', '</ltx:block>');
+
+
+DefMacro('\pause', '\beamer@overlay@end\addtocounter{beamer@slideinframe}{1}\beamer@overlay@begin');
+# \onslide optionalMatch:* optionalmatch:+
+DefMacro('\uncover', '\beamer@overlay@end\addtocounter{beamer@slideinframe}{1}\beamer@overlay@begin');
+
 
 my $overlayParser = Parse::RecDescent->new(<<'EOGRAMMAR');
 start : 
@@ -167,23 +178,12 @@ sub processOverlaySpec {
   } @$ast;
   return [@mapped], $lastPlus; }
 
-# Define a new counter for the current frame
+# count the current frame number (the last "+" to be encountered)
 NewCounter('beamer@slideinframe');
-SetCounter('beamer@slideinframe', Number(0));
 
-DefParameterType('BeamerOverlay', sub {
-   my ($gullet) = @_;
-   my $tok = $gullet->readXToken;
-   if (ref $tok && ToString($tok) eq '<') {
-     $gullet->readUntil(T_OTHER('>'));
-   } else {
-     $gullet->unread($tok) if ref $tok;
-     undef; }},
-     reversion=> sub {
- (T_OTHER('<'), $_[0]->revert, T_OTHER('>'));
-       });
-
-DefConstructor('\only BeamerOverlay {}', "<ltx:para class='#indexes'>#2</ltx:para>", properties => sub {
+# TODO: This needs to be made an <ltx:overlay> or ltx:slide inside an ltx:frame, but that needs schema changes
+# so we're omitting it for now
+DefMacro('\only BeamerOverlay {}', "<ltx:para class='#indexes'>#2</ltx:para>", properties => sub {
   my ($stomach, $overlay) = @_;
   my ($spec);
   # read an store $lastPlus
@@ -211,13 +211,8 @@ RequirePackage('hyperref', options => ['bookmarks=true', 'bookmarksopen=true', '
 
 #**********************************************************************
 # Document structure.
-RelaxNGSchema("LaTeXML");
+RelaxNGSchema("LaTeXML"); # TODO: Re-enable this!
 # RequireResource('ltx-article.css');
-
-# for the moment, have a very simple binding for all of these!
-DefEnvironment('{frame}[]', "<ltx:slide>#body</ltx:slide>");
-DefConstructor('\frametitle{}', '<ltx:title>#1</ltx:title>'); # TODO: Schema!
-DefConstructor('\framesubtitle{}', '<ltx:subtitle>#1</ltx:subtitle>'); # TODO: Schema!
 
 # for now all this is ignored!
 DefMacro('\setbeamertemplate{}[]', undef); # TODO: Optional {} following the options!
