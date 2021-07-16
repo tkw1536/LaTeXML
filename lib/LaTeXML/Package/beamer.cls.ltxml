@@ -38,11 +38,88 @@ DefParameterType('BeamerOverlay', sub {
        });
 
 #**********************************************************************
+# Mode support
+
+# Beamer has five modes: beamer, second, handout, trans, article.
+# The \mode command allows showing content only in specific modes.
+# It can also take the 'all' argument (stuff visible in any mode) or 'presentation' (anything except article).
+# We call these a compound mode, the above a leaf mode.
+#
+# In real tex, only one mode is active at a time.
+# In latexml we activate all modes at the same time and guard visibility using the target format
+# (e.g. in CSS set display:none) etc.
+
+# TeX itself assumes a leaf mode in the 'beamer@mode' macro.
+# when switching to 'all' or 'presentation' compound modes, we must pick one of them here.
+AssignValue('beamer@mode@leaf@all', 'beamer');
+AssignValue('beamer@mode@leaf@presentation', 'beamer');
+sub pickLeafMode {
+  my ($mode) = @_;
+  return LookupValue('beamer@mode@leaf@all') if $mode eq 'all';
+  return LookupValue('beamer@mode@leaf@presentation') if $mode eq 'presentation';
+  $mode; }
+# The beamer@@mode wraps content in a specific mode.
+# It is responsible for setting the 'beamer@mode' macro appropriatly.
+DefEnvironment('{beamer@@mode}{}', "<ltx:para class='inmode #mode'>#body</ltx:para>", properties => sub {
+  my ($stomach, $mode) = @_;
+  return (mode => ToString($mode)) }, 
+# TODO: Set internal \if s here (like beamer@presentation) etc
+afterDigestBegin => sub {
+  my ($stomach, $whatsit) = @_;
+  DefMacro('\beamer@mode', pickLeafMode($whatsit->getProperty('mode'))); });
+
+# Define a 'beamer@ltxmode' value to hold the current (leaf or compound) mode.
+# And a switch-mode macro responsible for maintaining it and wrapping in the beamer@@mode environment.
+DefMacro('\beamer@switchmode{}', sub {
+  my ($gullet, $mode) = @_;
+  my $newMode = ToString($mode);
+  my $currentMode = LookupValue('beamer@ltxmode');
+  my @return = ();
+  # if we are not in the 'all' mode, we need to close whatever mode we are in
+  push(@return, T_CS('\beamer@mode@close')) unless ($currentMode eq 'all');
+  # if the new mode isn't 'all', we need to switch to it!
+  push(@return, (T_CS('\beamer@mode@open'), T_BEGIN, $mode->revert, T_END)) unless ($newMode eq 'all');
+  AssignValue('beamer@ltxmode', $newMode, 'global');
+  @return; });
+
+DefMacro('\beamer@mode@open{}', '\begin{beamer@@mode}{#1}');
+DefMacro('\beamer@mode@close', '\end{beamer@@mode}');
+
+# we are in 'all' mode now, and should be back at it before the document ends.
+AssignValue('beamer@ltxmode', 'all', 'global');
+AtEndDocument(T_CS('\beamer@switchmode'), T_BEGIN, Tokenize('all'), T_END);
+
+# '\mode' switches the current mode, either until the next \mode, or for a specific block
+DefMacro('\mode OptionalMatch:* OptionalBeamerOverlay Optional {}', sub {
+  my ($gullet, $star, $overlay, $arg) = @_;
+  $DB::single = 1;
+  if(defined($star)) {
+    # \mode* takes no arguments and just "hides" text outside of presentation mode
+    # TODO: Figure out if we want to do something with that
+    return $arg->revert if defined($arg);
+    return }
+  # in other modes, we require the overlay specification, so bail out if it's missing!
+  unless(defined($overlay)) {
+    Warn('expected', '<', undef, "Expected mode specification");
+    return; }
+  # explicit body => switchmode, add the body, and switch back
+  if(defined($arg)) {
+    return (
+      T_CS('\beamer@switchmode'), T_BEGIN, Tokenize(ToString($overlay)), T_END,
+      $arg->revert,
+      T_CS('\beamer@switchmode'), T_BEGIN, Tokenize(LookupValue('beamer@mode')), T_END,
+    ); }
+  # else we switch the mode
+  return (T_CS('\beamer@switchmode'), T_BEGIN, Tokenize(ToString($overlay)), T_END); });
+
+
+#**********************************************************************
 # Frames - the main environment for beamer
 
-DefMacro('\begin{frame} OptionalBeamerOverlay [OptionalBeamerOverlay] [] Optional {} Optional {}', 
-  '\begin{beamer@frame}#1 #2 #3 #4 #5');
-DefMacro('\end{frame}', '\beamer@frame@end\end{beamer@frame}');
+# I don't know what defined the environment, but it's already here!
+RawTeX(<<'EoTeX');
+\renewenvironment{frame}{\begin{beamer@frame}\beamer@frame@begin}{\beamer@frame@end\end{beamer@frame}}
+EoTeX
 
 # the actual frame environemnt
 DefEnvironment('{beamer@frame}[]', "<ltx:slide class='frame'>#body</ltx:slide>");
@@ -52,10 +129,8 @@ DefMacro('\beamer@frame@begin',
   '\beamer@overlay@begin'); # immediatly start a new overlay!
 DefMacro('\beamer@frame@end', '\beamer@overlay@end'); # end an
 
-
 DefConstructor('\frametitle{}', '<ltx:title>#1</ltx:title>');
 DefConstructor('\framesubtitle{}', '<ltx:subtitle>#1</ltx:subtitle>');
-
 
 #**********************************************************************
 # Overlays
@@ -63,14 +138,15 @@ DefConstructor('\framesubtitle{}', '<ltx:subtitle>#1</ltx:subtitle>');
 # These in principle insert a <ltx:block class="ltx_overlay"> into the right places. 
 # The tricky part is getting the starting and ending right.
 
-# TODO: Pass arguments here!
+# TODO: Pass arguments for what kind of overlay it is here!
 DefConstructor('\beamer@overlay@begin', "<ltx:block class='ltx_overlay'>");
 DefConstructor('\beamer@overlay@end', '</ltx:block>');
 
-
 DefMacro('\pause', '\beamer@overlay@end\addtocounter{beamer@slideinframe}{1}\beamer@overlay@begin');
-# \onslide optionalMatch:* optionalmatch:+
 DefMacro('\uncover', '\beamer@overlay@end\addtocounter{beamer@slideinframe}{1}\beamer@overlay@begin');
+
+#**********************************************************************
+# Overlay Specifications
 
 
 my $overlayParser = Parse::RecDescent->new(<<'EOGRAMMAR');
@@ -183,7 +259,7 @@ NewCounter('beamer@slideinframe');
 
 # TODO: This needs to be made an <ltx:overlay> or ltx:slide inside an ltx:frame, but that needs schema changes
 # so we're omitting it for now
-DefMacro('\only BeamerOverlay {}', "<ltx:para class='#indexes'>#2</ltx:para>", properties => sub {
+DefConstructor('\only BeamerOverlay {}', "<ltx:para class='#indexes'>#2</ltx:para>", properties => sub {
   my ($stomach, $overlay) = @_;
   my ($spec);
   # read an store $lastPlus
@@ -214,12 +290,10 @@ RequirePackage('hyperref', options => ['bookmarks=true', 'bookmarksopen=true', '
 RelaxNGSchema("LaTeXML"); # TODO: Re-enable this!
 # RequireResource('ltx-article.css');
 
-# for now all this is ignored!
-DefMacro('\setbeamertemplate{}[]', undef); # TODO: Optional {} following the options!
+# ignore all the styling
+DefMacro('\setbeamertemplate{}[] Optional {}', undef);
 DefMacro('\setbeamercolor{}{}', undef);
 DefMacro('\setbeamerfont{}{}', undef);
-
-
 
 #**********************************************************************
 # Core sectioning support, stolen from article.cls!

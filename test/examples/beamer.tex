@@ -1,22 +1,17 @@
 \documentclass{beamer}
 \begin{document}
-    \begin{frame}
-        \frametitle{Outline}
-        \tableofcontents
-    \end{frame}
 
-    \section{Motivation}
+    All modes
 
-    \begin{frame}
-        \frametitle{There Is No Largest Prime Number}
-        \framesubtitle{The proof uses \textit{reductio ad absurdum}.}
-        \only<1>{\textbf{Hello} world}
-        % \begin{enumerate}
-        %     \item<1-| alert@1> Suppose $p$ were the largest prime number.
-        %     \item<2-> Let $q$ be the product of the first $p$ numbers.
-        %     \item<3-> Then $q+1$ is not divisible by any of them.
-        %     \item<1-> Thus $q+1$ is also prime and greater than $p$.
-        %     \qedhere
-        % \end{enumerate}
-    \end{frame}
+    \mode<presentation>
+    My current mode is:  \makeatletter\beamer@mode\makeatother
+    \mode<all>
+
+    All modes again
+
+    \mode<presentation>
+
+    Presentation modes
+
+
 \end{document}
